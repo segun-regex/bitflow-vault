@@ -505,3 +505,107 @@
     (ok rewards)
   )
 )
+
+;; PROTOCOL OPTIMIZATION ENGINE
+
+;; Automated Portfolio Rebalancing
+(define-private (rebalance-protocols)
+  (let ((total-allocations (fold + (map get-protocol-allocation (get-protocol-list)) u0)))
+    (asserts! (<= total-allocations u10000) ERR-INVALID-AMOUNT)
+    (ok true)
+  )
+)
+
+;; Weighted APY Calculation
+(define-private (get-weighted-apy)
+  (fold + (map get-weighted-protocol-apy (get-protocol-list)) u0)
+)
+
+;; Individual Protocol APY Weighting
+(define-private (get-weighted-protocol-apy (protocol-id uint))
+  (let (
+      (protocol (unwrap-panic (get-protocol protocol-id)))
+      (allocation (get allocation
+        (unwrap-panic (map-get? strategy-allocations { protocol-id: protocol-id }))
+      ))
+    )
+    (if (get active protocol)
+      (/ (* (get apy protocol) allocation) u10000)
+      u0
+    )
+  )
+)
+
+;; READ-ONLY QUERY FUNCTIONS
+
+;; Get Protocol Information
+(define-read-only (get-protocol (protocol-id uint))
+  (map-get? protocols { protocol-id: protocol-id })
+)
+
+;; Get User Deposit Information
+(define-read-only (get-user-deposit (user principal))
+  (map-get? user-deposits { user: user })
+)
+
+;; Get Total Value Locked
+(define-read-only (get-total-tvl)
+  (var-get total-tvl)
+)
+
+;; Check Token Whitelist Status
+(define-read-only (is-whitelisted (token <sip-010-trait>))
+  (default-to false
+    (get approved (map-get? whitelisted-tokens { token: (contract-of token) }))
+  )
+)
+
+;; ADMINISTRATIVE FUNCTIONS
+
+;; Set Platform Fee Rate
+(define-public (set-platform-fee (new-fee uint))
+  (begin
+    (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
+    (asserts! (<= new-fee u1000) ERR-INVALID-AMOUNT)
+    (var-set platform-fee-rate new-fee)
+    (ok true)
+  )
+)
+
+;; Emergency System Shutdown Control
+(define-public (set-emergency-shutdown (shutdown bool))
+  (begin
+    (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
+    (asserts! (not (is-eq shutdown (var-get emergency-shutdown)))
+      ERR-INVALID-STATE
+    )
+    (print {
+      event: "emergency-shutdown",
+      status: shutdown,
+    })
+    (var-set emergency-shutdown shutdown)
+    (ok true)
+  )
+)
+
+;; Token Whitelisting System
+(define-public (whitelist-token (token <sip-010-trait>))
+  (begin
+    (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
+    (let ((token-contract (contract-of token)))
+      (asserts! (not (is-whitelisted token)) ERR-ALREADY-WHITELISTED)
+
+      (try! (contract-call? token get-name))
+      (try! (contract-call? token get-symbol))
+      (try! (contract-call? token get-decimals))
+      (try! (contract-call? token get-total-supply))
+
+      (map-set whitelisted-tokens { token: token-contract } { approved: true })
+      (print {
+        event: "token-whitelisted",
+        token: token-contract,
+      })
+      (ok true)
+    )
+  )
+)
