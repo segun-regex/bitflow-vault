@@ -609,3 +609,54 @@
     )
   )
 )
+
+;; UTILITY & HELPER FUNCTIONS
+
+;; Get Active Protocol List
+(define-private (get-protocol-list)
+  (list u1 u2 u3 u4 u5)
+)
+
+;; Get Protocol Allocation Percentage
+(define-private (get-protocol-allocation (protocol-id uint))
+  (get allocation
+    (default-to { allocation: u0 }
+      (map-get? strategy-allocations { protocol-id: protocol-id })
+    ))
+)
+
+;; Rate Limiting Check
+(define-private (check-rate-limit (user principal))
+  (let ((user-ops (default-to {
+      last-operation: u0,
+      count: u0,
+    }
+      (map-get? user-operations { user: user })
+    )))
+    (asserts!
+      (or
+        (> stacks-block-height (+ (get last-operation user-ops) u144))
+        (< (get count user-ops) u10)
+      )
+      ERR-RATE-LIMITED
+    )
+    (ok true)
+  )
+)
+
+;; Update Rate Limiting Counters
+(define-private (update-rate-limit (user principal))
+  (let ((user-ops (default-to {
+      last-operation: u0,
+      count: u0,
+    }
+      (map-get? user-operations { user: user })
+    )))
+    (map-set user-operations { user: user } {
+      last-operation: stacks-block-height,
+      count: (if (> stacks-block-height (+ (get last-operation user-ops) u144))
+        u1
+        (+ (get count user-ops) u1)
+      ),
+    })
+  )
