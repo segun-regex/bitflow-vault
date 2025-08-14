@@ -299,3 +299,109 @@
     (asserts! (get approved (unwrap-panic token-info))
       ERR-PROTOCOL-NOT-WHITELISTED
     )
+
+    (let (
+        (name-response (try! (contract-call? token-trait get-name)))
+        (symbol-response (try! (contract-call? token-trait get-symbol)))
+        (decimals-response (try! (contract-call? token-trait get-decimals)))
+      )
+      (asserts!
+        (and
+          (> (len name-response) u0)
+          (> (len symbol-response) u0)
+          (>= decimals-response u0)
+        )
+        ERR-INVALID-TOKEN
+      )
+    )
+
+    (ok token-contract)
+  )
+)
+
+;; Extended Token Validation with Additional Checks
+(define-private (validate-token-extended (token-trait <sip-010-trait>))
+  (let (
+      (token-contract (contract-of token-trait))
+      (token-info (map-get? whitelisted-tokens { token: token-contract }))
+    )
+    (try! (validate-token token-trait))
+
+    (asserts! (not (is-eq token-contract (as-contract tx-sender)))
+      ERR-INVALID-TOKEN
+    )
+
+    (let ((total-supply (try! (contract-call? token-trait get-total-supply))))
+      (asserts! (> total-supply u0) ERR-INVALID-TOKEN)
+    )
+
+    (let ((decimals (try! (contract-call? token-trait get-decimals))))
+      (asserts! (and (>= decimals u6) (<= decimals u18)) ERR-INVALID-TOKEN)
+    )
+
+    (ok token-contract)
+  )
+)
+
+;; DEPOSIT MANAGEMENT SYSTEM
+
+;; User Deposit Function
+(define-public (deposit
+    (token-trait <sip-010-trait>)
+    (amount uint)
+  )
+  (let (
+      (user-principal tx-sender)
+      (current-deposit (default-to {
+        amount: u0,
+        last-deposit-block: u0,
+      }
+        (map-get? user-deposits { user: user-principal })
+      ))
+    )
+    (try! (check-valid-amount amount))
+    (try! (check-valid-user user-principal))
+    (try! (validate-token-extended token-trait))
+    (try! (check-rate-limit user-principal))
+    (try! (check-contract-state))
+
+    (asserts! (>= amount (var-get min-deposit)) ERR-MIN-DEPOSIT-NOT-MET)
+    (asserts! (<= (+ amount (get amount current-deposit)) (var-get max-deposit))
+      ERR-MAX-DEPOSIT-REACHED
+    )
+
+    (let ((user-balance (try! (contract-call? token-trait get-balance user-principal))))
+      (asserts! (>= user-balance amount) ERR-INSUFFICIENT-BALANCE)
+    )
+
+    (try! (safe-token-transfer token-trait amount user-principal
+      (as-contract tx-sender)
+    ))
+
+    (map-set user-deposits { user: user-principal } {
+      amount: (+ amount (get amount current-deposit)),
+      last-deposit-block: stacks-block-height,
+    })
+
+    (var-set total-tvl (+ (var-get total-tvl) amount))
+    (update-rate-limit user-principal)
+
+    (try! (rebalance-protocols))
+    (ok true)
+  )
+)
+
+;; User Withdrawal Function
+(define-public (withdraw
+    (token-trait <sip-010-trait>)
+    (amount uint)
+  )
+  (let (
+      (user-principal tx-sender)
+      (current-deposit (default-to {
+        amount: u0,
+        last-deposit-block: u0,
+      }
+        (map-get? user-deposits { user: user-principal })
+      ))
+    )
